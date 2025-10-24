@@ -60,6 +60,8 @@ vuedemo/
 
 .gitlab-ci.yaml 需要修改的配置
 ``` bash
+密钥的话尽量换成变量
+
 HARBOR_REGISTRY 我用的是阿里云的ACR 根据自己的情况修改
 
 build-image: 镜像仓库的密码根据自己情况修改
