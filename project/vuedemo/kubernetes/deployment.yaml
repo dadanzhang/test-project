@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vuedemo
+  namespace: default
+  labels:
+    app: vuedemo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: vuedemo
+  template:
+    metadata:
+      labels:
+        app: vuedemo
+    spec:
+      containers:
+      - name: vuedemo
+        image: $HARBOR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vuedemo-service
+  namespace: default
+spec:
+  selector:
+    app: vuedemo
+  ports:
+  - port: 80
+    targetPort: 80
+  type: NodePort

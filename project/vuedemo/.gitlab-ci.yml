@@ -1,0 +1,143 @@
+stages:
+  - build
+  - test
+  - docker-build
+  - deploy
+
+variables:
+  # 定义镜像相关变量，方便维护
+  HARBOR_REGISTRY: "registry.cn-shanghai.aliyuncs.com"
+  IMAGE_NAME: "wql-k8s/vuedemo"  # 请修改为你的实际应用名称
+  IMAGE_TAG: "$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA"  # 使用分支名和提交SHA作为标签
+
+# 应用构建
+build-app:
+  tags:
+    - node
+  image: registry.cn-shanghai.aliyuncs.com/wql-k8s/node:16.17.1
+  stage: build
+  script:
+    - echo "开始构建应用"
+    - npm config set registry https://registry.npmmirror.com
+    - npm install
+    - npm run build
+  artifacts:
+    paths:
+      - dist/  # 假设构建产物在dist目录，请根据实际情况调整
+      - node_modules/
+    expire_in: 1 hour
+
+# 代码质量检查
+code-quality:
+  tags:
+    - node
+  image: registry.cn-shanghai.aliyuncs.com/wql-k8s/node:16.17.1
+  stage: test
+  script:
+    - echo "运行测试"
+    - npm config set registry https://registry.npmmirror.com
+    - npm install
+    - npm run test:ci  # 或者 npm run lint, 根据你的 package.json 配置
+    - echo "✅ 代码检查通过"
+  dependencies:
+    - build-app
+  # only:
+  #   - merge_requests  # 只在合并请求时运行测试
+
+# 镜像构建
+build-image:
+  tags:
+    - node
+  image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/docker:24.0.5  # 使用 Docker 客户端镜像
+  services:
+    - name: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/docker:24.0.5-dind  # 使用 Docker-in-Docker 服务
+      alias: docker
+      command: ["dockerd", "--host", "tcp://0.0.0.0:2375", "--tls=false"]
+  variables:
+    # 设置 Docker 客户端使用 tcp 连接 dind 服务
+    DOCKER_HOST: "tcp://docker:2375"
+    # 禁用 TLS 验证
+    DOCKER_TLS_VERIFY: ""
+  stage: docker-build
+  dependencies:
+    - build-app  # 依赖构建阶段
+  before_script:
+    # 等待 Docker 服务就绪
+    - sleep 10
+    - docker info || echo "Docker not ready yet"
+
+  script:
+    - echo "开始构建 Docker 镜像"
+    - echo "登录 Harbor 仓库"
+    - echo "xxxx" > /tmp/password
+    - cat /tmp/password | docker login -u "1xxxxxx2" --password-stdin $HARBOR_REGISTRY
+    # 验证登录
+    - echo "登录验证:"
+    - docker info | grep Registry || echo "Registry info not available"
+    # 构建镜像
+    - docker build -t $HARBOR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG .
+    # 推送镜像到 Harbor
+    - docker push $HARBOR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG
+    # 清理本地镜像
+    - docker rmi $HARBOR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG
+  after_script:
+    - docker logout $HARBOR_REGISTRY
+
+# 部署
+deploy:
+  tags:
+    - node
+  image: registry.cn-shanghai.aliyuncs.com/wql-k8s/kubectl:latest
+  stage: deploy
+  dependencies: 
+    - build-image
+  before_script:
+    - mkdir -p ~/.kube
+    # 创建完整的 kubeconfig 文件
+    - |
+      cat > ~/.kube/config << EOF
+      apiVersion: v1
+      clusters:
+      - cluster:
+          certificate-authority-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURCVENDQWUyZ0F3SUJBZ0lJTDk3cFVFMzdBZmd3RFFZSktvWklodmNOQVFFTEJRQXdGVEVUTUJFR0ExVUUKQXhNS2EzVmlaWEp1WlhSbGN6QWVGdzB5TlRBNU1qZ3dPVE16TVRWYUZ3MHpOVEE1TWpZd09UTTRNVFZhTUJVeApFekFSQmdOVkJBTVRDbXQxWW1WeWJtVjBaWE13Z2dFaU1BMEdDU3FHU0liM0RRRUJBUVVBQTRJQkR3QXdnZ0VLCkFvSUJBUURKVUhKZXdiNHFtN0VMZHFzbkZFNnQ5ZzBnWXNnR3NucFRmMTdPQXlkWjFkMDI4dTRBMWRLYmpzOUoKSnFsdS9yQTUzejQ2OWlzTXNuaVVNeU4rRFdXSyt3Q3VaNEVDRzVhUW5WZDFhUjAwTHZZS2lSQnI5TXkrMVc1TApQei9Ic3JPd3cwWWtYVXVWczQveDV1c2dVQ05DZXFRQlhpRk9VMDlUU0pZb3IzbWFWMWQvWlY4algzSTdxVU9UCnIwSGxUdEhBdW92ZVNtRXpUa0ZWd2tUMXo3bGl3QnFabndzQ2xXWWdTUkI2VUlOVDZQTzNNbXNqMFNhOFhMSGsKc0cwTnJjLy9MYk10d3FDak5WM1h3YzRjNURyeE52a3JLNUdabU1CRWlRN3FPVXUrbW9FU3U0aFNkaThqVk5BYgpSejM4MXl6T2RCQ1RZaHJWU21LYlo4S2JidlpIQWdNQkFBR2pXVEJYTUE0R0ExVWREd0VCL3dRRUF3SUNwREFQCkJnTlZIUk1CQWY4RUJUQURBUUgvTUIwR0ExVWREZ1FXQkJUTEk0SFUzdkpNaURMVnVtdDhjamFrbHdueCtEQVYKQmdOVkhSRUVEakFNZ2dwcmRXSmxjbTVsZEdWek1BMEdDU3FHU0liM0RRRUJDd1VBQTRJQkFRQjZPVXpuaW9xYQowcDZ1MkwyRDFZYVRiUzJlcWduaktvQ1hmdWV5WThhNXQ1bGwwOVUxQm1zcVJMWWZPS25iWGJZYno5a2dhMHIzCk1yaFk2aDduQU5qYk5TVndyVkduYVpqeTBNdXFIc1V0cWVxZEtHNU15NW05WWNpSUd4VHZsVTYwb09CMkVKQWsKTk1OK3daZk9OSkM2ZU02eTRiV1NCV2NIVUt6bEtTM3h4WC9Tbmg3M2VNQ25KZlRXdDlEem9VRHpmTUZBTFA1TApqemdCRkRmVjdPeWM2ckdNWjdFWklnQlR5ZmIxV293U3dZSmk5OUhDbVlRZzhERFJDTzJnU2xsZUlQaHJkUStICll3alUyc3ZXWHN4aGdybXIwNEkvTk9oeFVoaVorN00zUkZHVHI0VVJTeVQ4UDFuT1VBOGQ3VGxZTmVGNE9VYnMKdGhYbThRL0kxN0dICi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+          server: https://xx.xx.xx.xx:6443
+        name: kubernetes
+      contexts:
+      - context:
+          cluster: kubernetes
+          user: kubernetes-admin
+        name: kubernetes-admin@kubernetes
+      current-context: kubernetes-admin@kubernetes
+      kind: Config
+      users:
+      - name: kubernetes-admin
+        user:
+          client-certificate-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURLVENDQWhHZ0F3SUJBZ0lJTkFBRXd4Y3FnUzB3RFFZSktvWklodmNOQVFFTEJRQXdGVEVUTUJFR0ExVUUKQXhNS2EzVmlaWEp1WlhSbGN6QWVGdzB5TlRBNU1qZ3dPVE16TVRWYUZ3MHlOakE1TWpnd09UTTRNVFZhTUR3eApIekFkQmdOVkJBb1RGbXQxWW1WaFpHMDZZMngxYzNSbGNpMWhaRzFwYm5NeEdUQVhCZ05WQkFNVEVHdDFZbVZ5CmJtVjBaWE10WVdSdGFXNHdnZ0VpTUEwR0NTcUdTSWIzRFFFQkFRVUFBNElCRHdBd2dnRUtBb0lCQVFEd1A4S0UKdWx3djRGNEplMWFYZXRRWkZTRVUvTGNyRzRaTk9NTzdCd0RJalB6eENqK3FVcThoNUt6UWpWdXh6M0dBbEs1MgpzckJSNHIwbWwxQ3JWaGliN1lYSnExZGppeDZkMkhxaGpjc0pQTXNVU2VzWENvWEhLSVhsS1A3YU9NV3lDUUc0ClFXLzlDZFIyQWVISFdRUHRtR2x5L1RpVDNUR243L3huZGNobmRkTTdPVktBQWpBcEt0K2cybHN2cGpzcUdKbEgKLy94UXdHVUdaWi9CZDNCTDM2K05iTGlua05KRmhCOTZyaFQ3N0s5UjZkcFVTaG1CUjRYa2Q0N0VsSDVWS2JrLwpQOGdESFBaamU3dTJJYWJBRDQwK0hUdDJZQkEzUTVxOG5ueTl5TWptNW1lMzExbHd0SFRmL2VYN28ycUlYdUcrClJZNFUwRUJWN1pDL0ptb0RBZ01CQUFHalZqQlVNQTRHQTFVZER3RUIvd1FFQXdJRm9EQVRCZ05WSFNVRUREQUsKQmdnckJnRUZCUWNEQWpBTUJnTlZIUk1CQWY4RUFqQUFNQjhHQTFVZEl3UVlNQmFBRk1zamdkVGU4a3lJTXRXNgphM3h5TnFTWENmSDRNQTBHQ1NxR1NJYjNEUUVCQ3dVQUE0SUJBUUJ0bWg1anplRWh6VENsZjk5OHEvS2NnTm4wCjBVaGw0eEpTSVFnVFVDRTJVK3ZUbEY5bFNTWTNQMjZlNmVmajV4ZHBFQnhLU3BKNXc2dzlKTG1SQmd0cnlsVncKRGpKOHJUN2N1S3lhZTJqUjNRMDZ6aXNzYnBpT2VTcmV5WjFObmh6cDIxTFBBNXllaHp4RkVHaEh3STlYL0VZUwo0NlhhbFhmTENqbktsL2I1RnNKZGdvQTFhREc4Zks4emdSVjNPK0N4cG93aEo4VEx6MDFTZ2dEQm9HR2VVcy9xClNNNGMyWE5TakoyMm05SjlnMWVoNlk4MVpxc3U3N0owUWxOM2t6MFVGdE45enVaTUV1cHJqdXM3NkV6OUwzMHYKeDMyQ2FoTlRqSFhsNkdJcmtCR3RzL1VONHNjbVhoOUVYNFZ1TjYyYnRvVVk4Vi94SUpSQisyMUViRnk0Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+          client-key-data: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFcEFJQkFBS0NBUUVBOEQvQ2hMcGNMK0JlQ1h0V2wzclVHUlVoRlB5M0t4dUdUVGpEdXdjQXlJejg4UW8vCnFsS3ZJZVNzMEkxYnNjOXhnSlN1ZHJLd1VlSzlKcGRRcTFZWW0rMkZ5YXRYWTRzZW5kaDZvWTNMQ1R6TEZFbnIKRndxRnh5aUY1U2orMmpqRnNna0J1RUZ2L1FuVWRnSGh4MWtEN1pocGN2MDRrOTB4cCsvOFozWElaM1hUT3psUwpnQUl3S1NyZm9OcGJMNlk3S2hpWlIvLzhVTUJsQm1XZndYZHdTOSt2ald5NHA1RFNSWVFmZXE0VSsreXZVZW5hClZFb1pnVWVGNUhlT3hKUitWU201UHovSUF4ejJZM3U3dGlHbXdBK05QaDA3ZG1BUU4wT2F2SjU4dmNqSTV1Wm4KdDlkWmNMUjAzLzNsKzZOcWlGN2h2a1dPRk5CQVZlMlF2eVpxQXdJREFRQUJBb0lCQUdQaUxrNGVhTnRpemRYbApXRy9zR2lnL2Q1eVJJTm9rUEdiNGxhKzVUcU1Tc3NySDl3WXFFRFBvTGMwYktDYzUxcmVkbVJjeVhVbitHYVBrCnZ4NHMwbGhwblBqbWFwT3hNRTV4eFRKTGtFRkw3Q2FJUU53NGZMdjdaZ2VMVHNHTlh1d1JBSTBKYjdUbEZGYm4KbTJYVTVXUXZ2SStaSlorY0U5djlVNVAwRFJpdHZweTFaVkxsT2ZFcmM1MWpxQWo1eElNS21CcVBTVzc1ZmFZYgpjb2ZVR1p0VjBCdE1SQVBBa3dRVUYzQ0lMQjYwWFNXeHBYNmZ0Mno2WmhaYmV5UFdsNG9hTCtvTkNYWXdTL25kCkdSMWk3eTVIU3pyVWg4dmZCZVpab3VEUDFwSGxQZVo4YWE4dy82c3V2V1U1Zm85aWpMd0RIZlZkN3BibWZkYVkKR01EQkdvRUNnWUVBOHRWTzJnU1BSWW9PcThFd3NkN3JQTTZSZGRRRDFKUFRrWnRFMjdDbkFwWEZleG5FeGJlcQpqSTRoMlllWEV4cmJIaytmQ3NITTgwOWZEblcwcXFFMEo5OGZUbFliN21KWTY5Zm55MnR3Q1ZRTktuVExtT2VpCnV2Vng3bURkVVF6NXFMVzlJcVdMSTRYeG52U3E0dFlSYnVNNjNROXZZczVRR2R1Q05rL3Avc0VDZ1lFQS9VYVUKN0kxR3hMZGJPSEQvNklxVW9JYXpDSFZRd3hUSzlXQ3dTNTh0d0JHR3ZPYnF1cjRGd2trWkg4blkzbHNYM09MLwpab2w4YUE5OENEaFdTSmVaL3BzN0U3Q1VWQjJLYXJkamQ2RThUbkRyTVdTWGQxREpnd1RyN0JmdVVBYVN3SUt4ClV5c2lFRWJlK3F6RkZkK0k4WUNFc0cyKzBsSHhqb3JURmdidG5jTUNnWUVBNmMydlNnS3gzNFo1Y2Exa3NSMnMKNkxNTElxT3J2SFZJY3gxSVF5M20zM3BNMWFXTjY4QlhHVldRQ2QyZSsrb1RweStLTmRVNis5a2o4TXdyMDAyNgo1ZGpTVDU1Zzdqa0szS2pZcU9jY3pCNTlQcStOaC84ZWsxdlhBbW1KTFl5TXBIKzNSekNVc3ZNNEhJLytLTUZyCnI1UmhESTdiOUFvbzNYeVg5cXNpNVFFQ2dZRUF5em1aUVgzU3JRR2E5bHpsV2tmb0hpNDI5YkI4anl2ZDlxb1EKaTMwOERvT0JvNDErQnoxMkRZRHQ0ZTNxVC9DejR3OVpjNE1hQ2IxeS9uMkY3bFdHd1I3NWRrRVhvNjdZWSt5bQpxVlQ4dU13dVM4RzFMNDNwUTNIdGc5Rm43VnA0NG5ON3FZcFFtTkxsRkNzUk1RM2VLam0vUG5td3hiM3VuenVSClNIbGlyRlVDZ1lCL01YcEZhOENLSmZYU0tobmlGSzJrMm52L0trWVNhYVQ0S1VsTkRMUWZ1NWtoMGFvVzdaYzkKdnI2VHp4V2FVSWlOQ1FnK2hLcE4vMFo3UGRFem9QNWN5MVR5TlFnZXBZOXVJMVJZWmh6bDREV05HcWV4cjhwbgpJWnB2Q3BPdzQ5amJMSU85bkE1ZXF1ZForL3MveWoyeHorNnZ2YmpJVlhCbUNZYmVIK2cyUXc9PQotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo=
+      EOF
+    - chmod 600 ~/.kube/config
+    - env
+  script:
+    - echo "当前 kubeconfig 内容:"
+    - cat ~/.kube/config
+    - echo "当前上下文:"
+    - kubectl config current-context
+    - echo "尝试列出节点:"
+    - kubectl get nodes
+    - echo "🚀 部署到 Kubernetes"
+    - echo "使用镜像:" $HARBOR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG
+    - kubectl set image deployment/vuedemo vuedemo=$HARBOR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG -n wql
+
+    # 等待部署完成
+    - kubectl rollout status deployment/vuedemo -n wql --timeout=300s
+    
+    # 显示部署信息
+    - echo "=== 部署详情 ==="
+    - kubectl get deployment,service,pod -n wql -l app=vuedemo
+    
+    # 获取服务访问 URL
+    - |
+      NODE_PORT=$(kubectl get service vuedemo-service -n wql -o jsonpath='{.spec.ports[0].nodePort}')
+      echo "🌐 应用可通过 NodePort 访问: http://<集群任意节点IP>:$NODE_PORT"
+  only:
+    - main  # 只在 main 分支触发部署
