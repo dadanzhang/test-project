@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: javademo
+  namespace: wql
+  labels:
+    app: javademo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: javademo
+  template:
+    metadata:
+      labels:
+        app: javademo
+    spec:
+      containers:
+      - name: javademo
+        image: registry.cn-shanghai.aliyuncs.com/wql-k8s/javademo:main-d58c073c
+        # 或者使用变量替换：image: $HARBOR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG
+        ports:
+        - containerPort: 8080 # Java 应用通常使用 8080 端口
+        resources:
+          requests:
+            memory: "256Mi"  # Java 应用需要更多内存
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        env:
+        - name: JAVA_OPTS
+          value: "-Xmx256m -Xms128m"  # JVM 内存配置
+        livenessProbe:
+          httpGet:
+            path: /actuator/health  # Spring Boot 健康检查端点
+            port: 8080
+          initialDelaySeconds: 30 # Java 应用启动较慢
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: javademo-service
+  namespace: wql
+spec:
+  selector:
+    app: javademo
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  type: NodePort

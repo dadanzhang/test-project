@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Spring Boot Demo</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .endpoint { background: #f5f5f5; padding: 10px; margin: 5px 0; border-radius: 5px; }
+        a { color: #007bff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎉 Spring Boot 应用部署成功！</h1>
+        <p><strong>状态</strong>: ✅ 运行正常</p>
+        <p><strong>部署环境</strong>: Kubernetes</p>
+        <p><strong>访问方式</strong>: NodePort</p>
+        
+        <h2>📊 监控端点</h2>
+        <div class="endpoint">
+            <a href="/actuator/health">健康检查</a> - 查看应用健康状态
+        </div>
+        <div class="endpoint">
+            <a href="/actuator/info">应用信息</a> - 查看应用基本信息
+        </div>
+        <div class="endpoint">
+            <a href="/actuator/env">环境配置</a> - 查看环境变量和配置
+        </div>
+        <div class="endpoint">
+            <a href="/actuator/metrics">性能指标</a> - 查看应用性能指标
+        </div>
+        <div class="endpoint">
+            <a href="/actuator">所有端点</a> - 查看所有可用的监控端点
+        </div>
+
+        <h2>🔧 测试接口</h2>
+        <div class="endpoint">
+            <a href="/api/hello">Hello API</a> - 测试接口
+        </div>
+    </div>
+</body>
+</html>
